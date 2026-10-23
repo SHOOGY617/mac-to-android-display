@@ -2,6 +2,7 @@ package com.display.tablet.input
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
@@ -14,6 +15,7 @@ class InputManager(private val streamClient: StreamClient) {
     private val handler = Handler(Looper.getMainLooper())
 
     companion object {
+        private const val TAG = "InputManager"
         const val ACTION_DOWN = 0
         const val ACTION_MOVE = 1
         const val ACTION_UP = 2
@@ -26,13 +28,6 @@ class InputManager(private val streamClient: StreamClient) {
         const val ACTION_SWIPE_SPACES_RIGHT = 9
     }
 
-    private enum class TwoFingerMode {
-        UNDECIDED,
-        SCROLL,
-        PINCH,
-        TAP_HANDLED
-    }
-
     // View reference for haptic feedback
     private var attachedView: View? = null
 
@@ -43,8 +38,8 @@ class InputManager(private val streamClient: StreamClient) {
     private var hasMovedSignificantly = false
     private var isLongPressTriggered = false
 
-    // Multi-touch tracking
-    private var twoFingerMode = TwoFingerMode.UNDECIDED
+    // Two-finger tracking (Scroll, Pinch Zoom, Tap Right-Click)
+    private var isTwoFingerActive = false
     private var twoFingerStartTime = 0L
     private var twoFingerStartMidX = 0f
     private var twoFingerStartMidY = 0f
@@ -52,21 +47,26 @@ class InputManager(private val streamClient: StreamClient) {
     private var lastMidX = 0f
     private var lastMidY = 0f
     private var lastSpan = 0f
-    private var multiTouchInProgress = false
+    private var twoFingerMoved = false
+    private var pinchAccumulator = 0f
 
-    // Three-finger tracking
+    // Three-finger tracking (Mission Control, App Exposé, Spaces)
+    private var isThreeFingerActive = false
     private var threeFingerStartX = 0f
     private var threeFingerStartY = 0f
     private var threeFingerSwiped = false
 
+    private var multiTouchFinished = false
+
     private val longPressRunnable = Runnable {
-        if (!hasMovedSignificantly && !multiTouchInProgress) {
+        if (!hasMovedSignificantly && !multiTouchFinished && !isTwoFingerActive && !isThreeFingerActive) {
             isLongPressTriggered = true
             attachedView?.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             val width = attachedView?.width?.toFloat() ?: 1f
             val height = attachedView?.height?.toFloat() ?: 1f
             val normX = (downX / width).coerceIn(0f, 1f)
             val normY = (downY / height).coerceIn(0f, 1f)
+            Log.i(TAG, "Long-press triggered -> RIGHT CLICK at ($normX, $normY)")
             streamClient.sendInput(ACTION_RIGHT_CLICK, normX, normY, 0f, 0)
         }
     }
@@ -97,56 +97,62 @@ class InputManager(private val streamClient: StreamClient) {
                 streamClient.sendInput(ACTION_UP, normX, normY, 0f, 0)
                 isDragging = false
             }
-            multiTouchInProgress = true
+            multiTouchFinished = true
+            isTwoFingerActive = false
 
             val centroidX = (event.getX(0) + event.getX(1) + event.getX(2)) / 3f
             val centroidY = (event.getY(0) + event.getY(1) + event.getY(2)) / 3f
 
-            when (event.actionMasked) {
-                MotionEvent.ACTION_POINTER_DOWN -> {
-                    threeFingerStartX = centroidX
-                    threeFingerStartY = centroidY
-                    threeFingerSwiped = false
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (!threeFingerSwiped) {
-                        val deltaX = centroidX - threeFingerStartX
-                        val deltaY = centroidY - threeFingerStartY
-                        val threshold = 110f
+            if (!isThreeFingerActive) {
+                isThreeFingerActive = true
+                threeFingerStartX = centroidX
+                threeFingerStartY = centroidY
+                threeFingerSwiped = false
+                Log.d(TAG, "Three-finger gesture active at ($centroidX, $centroidY)")
+            }
 
-                        if (abs(deltaY) > threshold && abs(deltaY) > 1.3f * abs(deltaX)) {
-                            if (deltaY < -threshold) {
-                                // 3-finger swipe UP: Mission Control
-                                streamClient.sendInput(ACTION_MISSION_CONTROL, 0f, 0f, 0f, 0)
-                                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                                threeFingerSwiped = true
-                            } else if (deltaY > threshold) {
-                                // 3-finger swipe DOWN: App Exposé
-                                streamClient.sendInput(ACTION_APP_EXPOSE, 0f, 0f, 0f, 0)
-                                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                                threeFingerSwiped = true
-                            }
-                        } else if (abs(deltaX) > threshold && abs(deltaX) > 1.3f * abs(deltaY)) {
-                            if (deltaX < -threshold) {
-                                // 3-finger swipe LEFT: Space to the right
-                                streamClient.sendInput(ACTION_SWIPE_SPACES_RIGHT, 0f, 0f, 0f, 0)
-                                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                                threeFingerSwiped = true
-                            } else if (deltaX > threshold) {
-                                // 3-finger swipe RIGHT: Space to the left
-                                streamClient.sendInput(ACTION_SWIPE_SPACES_LEFT, 0f, 0f, 0f, 0)
-                                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                                threeFingerSwiped = true
-                            }
-                        }
+            if (event.actionMasked == MotionEvent.ACTION_MOVE && !threeFingerSwiped) {
+                val deltaX = centroidX - threeFingerStartX
+                val deltaY = centroidY - threeFingerStartY
+                val threshold = 70f // Very responsive trigger threshold
+
+                if (abs(deltaY) > threshold && abs(deltaY) > 1.2f * abs(deltaX)) {
+                    if (deltaY < -threshold) {
+                        // 3-finger swipe UP: Mission Control
+                        Log.i(TAG, "⚡️ Swiped UP -> Mission Control (deltaY=$deltaY)")
+                        streamClient.sendInput(ACTION_MISSION_CONTROL, 0f, 0f, 0f, 0)
+                        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                        threeFingerSwiped = true
+                    } else if (deltaY > threshold) {
+                        // 3-finger swipe DOWN: App Exposé
+                        Log.i(TAG, "⚡️ Swiped DOWN -> App Exposé (deltaY=$deltaY)")
+                        streamClient.sendInput(ACTION_APP_EXPOSE, 0f, 0f, 0f, 0)
+                        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                        threeFingerSwiped = true
+                    }
+                } else if (abs(deltaX) > threshold && abs(deltaX) > 1.2f * abs(deltaY)) {
+                    if (deltaX < -threshold) {
+                        // 3-finger swipe LEFT: Space to the right
+                        Log.i(TAG, "⚡️ Swiped LEFT -> Switch Space Right (deltaX=$deltaX)")
+                        streamClient.sendInput(ACTION_SWIPE_SPACES_RIGHT, 0f, 0f, 0f, 0)
+                        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                        threeFingerSwiped = true
+                    } else if (deltaX > threshold) {
+                        // 3-finger swipe RIGHT: Space to the left
+                        Log.i(TAG, "⚡️ Swiped RIGHT -> Switch Space Left (deltaX=$deltaX)")
+                        streamClient.sendInput(ACTION_SWIPE_SPACES_LEFT, 0f, 0f, 0f, 0)
+                        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                        threeFingerSwiped = true
                     }
                 }
             }
             return
+        } else {
+            isThreeFingerActive = false
         }
 
         // ----------------------------------------------------
-        // 2. TWO FINGERS: Right-Click Tap, Scroll, Pinch Zoom
+        // 2. TWO FINGERS: Pinch Zoom, Scroll, Right-Click Tap
         // ----------------------------------------------------
         if (pointerCount == 2) {
             handler.removeCallbacks(longPressRunnable)
@@ -156,59 +162,61 @@ class InputManager(private val streamClient: StreamClient) {
                 streamClient.sendInput(ACTION_UP, normX, normY, 0f, 0)
                 isDragging = false
             }
-            multiTouchInProgress = true
+            multiTouchFinished = true
 
             val midX = (event.getX(0) + event.getX(1)) / 2f
             val midY = (event.getY(0) + event.getY(1)) / 2f
             val span = hypot(event.getX(1) - event.getX(0), event.getY(1) - event.getY(0))
 
+            if (!isTwoFingerActive) {
+                isTwoFingerActive = true
+                twoFingerStartTime = System.currentTimeMillis()
+                twoFingerStartMidX = midX
+                twoFingerStartMidY = midY
+                twoFingerStartSpan = span
+                lastMidX = midX
+                lastMidY = midY
+                lastSpan = span
+                twoFingerMoved = false
+                pinchAccumulator = 0f
+            }
+
             when (event.actionMasked) {
-                MotionEvent.ACTION_POINTER_DOWN -> {
-                    twoFingerMode = TwoFingerMode.UNDECIDED
-                    twoFingerStartTime = System.currentTimeMillis()
-                    twoFingerStartMidX = midX
-                    twoFingerStartMidY = midY
-                    twoFingerStartSpan = span
+                MotionEvent.ACTION_MOVE -> {
+                    val dSpan = span - lastSpan
+                    val dMidX = midX - lastMidX
+                    val dMidY = midY - lastMidY
+                    val dMidDist = hypot(dMidX, dMidY)
+
+                    val totalSpanChange = abs(span - twoFingerStartSpan)
+                    val totalMidDist = hypot(midX - twoFingerStartMidX, midY - twoFingerStartMidY)
+
+                    if (totalSpanChange > 16f || totalMidDist > 16f) {
+                        twoFingerMoved = true
+                    }
+
+                    // Dynamically prioritize Pinch-to-Zoom if finger distance changes
+                    if (abs(dSpan) > 1.15f * dMidDist && abs(dSpan) > 2f) {
+                        pinchAccumulator += dSpan
+                        val zoomThreshold = 14f // Smooth step every 14px span change
+                        if (abs(pinchAccumulator) >= zoomThreshold) {
+                            val steps = (pinchAccumulator / zoomThreshold).toInt()
+                            pinchAccumulator -= steps * zoomThreshold
+                            val normX = (midX / width).coerceIn(0f, 1f)
+                            val normY = (midY / height).coerceIn(0f, 1f)
+                            Log.d(TAG, "🔍 Pinch Zoom: steps=$steps at ($normX, $normY)")
+                            streamClient.sendInput(ACTION_MAGNIFY, normX, normY, steps.toFloat(), 0)
+                        }
+                    } else if (dMidDist > 1.5f) {
+                        // Natural 2D scroll
+                        val deltaX = dMidX * 1.5f
+                        val deltaY = dMidY * 1.5f
+                        streamClient.sendInput(ACTION_SCROLL, deltaX, deltaY, 0f, 0)
+                    }
+
                     lastMidX = midX
                     lastMidY = midY
                     lastSpan = span
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val distMoved = hypot(midX - twoFingerStartMidX, midY - twoFingerStartMidY)
-                    val spanDelta = abs(span - twoFingerStartSpan)
-
-                    if (twoFingerMode == TwoFingerMode.UNDECIDED) {
-                        if (distMoved > 20f || spanDelta > 28f) {
-                            if (spanDelta > 1.3f * distMoved && spanDelta > 24f) {
-                                twoFingerMode = TwoFingerMode.PINCH
-                            } else {
-                                twoFingerMode = TwoFingerMode.SCROLL
-                            }
-                        }
-                    }
-
-                    when (twoFingerMode) {
-                        TwoFingerMode.SCROLL -> {
-                            val deltaX = (midX - lastMidX) * 1.5f
-                            val deltaY = (midY - lastMidY) * 1.5f
-                            lastMidX = midX
-                            lastMidY = midY
-                            streamClient.sendInput(ACTION_SCROLL, deltaX, deltaY, 0f, 0)
-                        }
-                        TwoFingerMode.PINCH -> {
-                            val zoomStep = (span - lastSpan) * 0.45f
-                            lastSpan = span
-                            lastMidX = midX
-                            lastMidY = midY
-                            val normX = (midX / width).coerceIn(0f, 1f)
-                            val normY = (midY / height).coerceIn(0f, 1f)
-                            streamClient.sendInput(ACTION_MAGNIFY, normX, normY, zoomStep, 0)
-                        }
-                        else -> {
-                            lastMidX = midX
-                            lastMidY = midY
-                        }
-                    }
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
                     val duration = System.currentTimeMillis() - twoFingerStartTime
@@ -216,27 +224,30 @@ class InputManager(private val streamClient: StreamClient) {
                     val spanMoved = abs(lastSpan - twoFingerStartSpan)
 
                     // Quick two-finger tap detection (<350ms with minimal travel) -> Right Click
-                    if (twoFingerMode == TwoFingerMode.UNDECIDED && duration < 350 && distMoved < 25f && spanMoved < 30f) {
+                    if (!twoFingerMoved && duration < 350 && distMoved < 25f && spanMoved < 30f) {
                         val normX = (twoFingerStartMidX / width).coerceIn(0f, 1f)
                         val normY = (twoFingerStartMidY / height).coerceIn(0f, 1f)
+                        Log.i(TAG, "🖱️ Two-finger tap -> RIGHT CLICK at ($normX, $normY)")
                         streamClient.sendInput(ACTION_RIGHT_CLICK, normX, normY, 0f, 0)
                         view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                        twoFingerMode = TwoFingerMode.TAP_HANDLED
                     }
+                    isTwoFingerActive = false
                 }
             }
             return
+        } else {
+            isTwoFingerActive = false
         }
 
         // ----------------------------------------------------
         // 3. SINGLE FINGER OR STYLUS
         // ----------------------------------------------------
-        if (multiTouchInProgress) {
+        if (multiTouchFinished) {
             // When all fingers leave the screen, reset multi-touch flag
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                multiTouchInProgress = false
-                twoFingerMode = TwoFingerMode.UNDECIDED
-                threeFingerSwiped = false
+                multiTouchFinished = false
+                isThreeFingerActive = false
+                isTwoFingerActive = false
             }
             return
         }

@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import AppKit
 
 public final class InputSynthesizer {
     private var targetDisplayBounds: CGRect
@@ -43,18 +44,23 @@ public final class InputSynthesizer {
             return
 
         case .magnify:
-            // Pinch-to-zoom: focal point in normalizedX/Y, zoom amount in pressure
+            // Pinch-to-zoom: focal point in normalizedX/Y, zoom step in pressure
             let screenX = currentBounds.origin.x + CGFloat(event.normalizedX) * currentBounds.width
             let screenY = currentBounds.origin.y + CGFloat(event.normalizedY) * currentBounds.height
             let point = CGPoint(x: screenX, y: screenY)
             CGWarpMouseCursorPosition(point)
 
-            let zoomAmount = Int32(event.pressure)
+            let steps = Int32(round(event.pressure))
+            guard steps != 0 else { return }
+
+            print("[Input] 🔍 Pinch Zoom: \(steps > 0 ? "IN" : "OUT") (\(steps)) at (\(Int(screenX)), \(Int(screenY)))")
+
+            // Synthesize line-based scroll wheel with Command modifier (universal macOS zoom)
             if let zoomEvent = CGEvent(
                 scrollWheelEvent2Source: nil,
-                units: .pixel,
+                units: .line,
                 wheelCount: 1,
-                wheel1: zoomAmount,
+                wheel1: steps * 2,
                 wheel2: 0,
                 wheel3: 0
             ) {
@@ -69,6 +75,8 @@ public final class InputSynthesizer {
             let screenY = currentBounds.origin.y + CGFloat(event.normalizedY) * currentBounds.height
             let point = CGPoint(x: screenX, y: screenY)
             CGWarpMouseCursorPosition(point)
+
+            print("[Input] 🖱️ Right Click at (\(Int(screenX)), \(Int(screenY)))")
 
             if let down = CGEvent(
                 mouseEventSource: nil,
@@ -91,22 +99,30 @@ public final class InputSynthesizer {
             return
 
         case .missionControl:
-            // 3-finger swipe UP: Mission Control (Ctrl + Up Arrow)
+            // 3-finger swipe UP: Mission Control
+            print("[Input] ⚡️ Mission Control triggered!")
+            let mcURL = URL(fileURLWithPath: "/System/Applications/Mission Control.app")
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.openApplication(at: mcURL, configuration: config, completionHandler: nil)
             synthesizeKeyShortcut(virtualKey: 0x7E, flags: .maskControl)
             return
 
         case .appExpose:
             // 3-finger swipe DOWN: Application Windows (Ctrl + Down Arrow)
+            print("[Input] ⚡️ App Exposé triggered!")
             synthesizeKeyShortcut(virtualKey: 0x7D, flags: .maskControl)
             return
 
         case .swipeSpacesLeft:
             // 3-finger swipe RIGHT: Switch to space on the left (Ctrl + Left Arrow)
+            print("[Input] ⚡️ Switch Space Left triggered!")
             synthesizeKeyShortcut(virtualKey: 0x7B, flags: .maskControl)
             return
 
         case .swipeSpacesRight:
             // 3-finger swipe LEFT: Switch to space on the right (Ctrl + Right Arrow)
+            print("[Input] ⚡️ Switch Space Right triggered!")
             synthesizeKeyShortcut(virtualKey: 0x7C, flags: .maskControl)
             return
 

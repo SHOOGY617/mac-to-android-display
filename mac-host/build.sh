@@ -24,6 +24,7 @@ swiftc $SDK_FLAGS -parse-as-library \
     -framework VideoToolbox \
     -framework CoreMedia \
     -framework CoreGraphics \
+    -framework AppKit \
     -framework Network \
     -O
 
