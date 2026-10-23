@@ -66,10 +66,7 @@ public final class InputSynthesizer {
             let steps = Double(event.pressure)
             guard steps != 0 else { return }
 
-            print("[Input] 🔍 Pinch Zoom: \(steps > 0 ? "IN" : "OUT") (\(steps)) at (\(Int(screenX)), \(Int(screenY)))")
-
-            // 1. Native Apple trackpad gesture event (Type 29, field 110=8, field 132=phase, field 113=delta)
-            // Handled natively by Safari, Preview, Maps, Photos, Figma, etc.
+            // Native Apple trackpad gesture event (Type 29, field 110=8, field 132=phase, field 113=delta)
             let delta = steps * 0.05
             if !isPinchActive {
                 isPinchActive = true
@@ -85,20 +82,7 @@ public final class InputSynthesizer {
                 self.isPinchActive = false
             }
             endPinchWorkItem = workItem
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.15, execute: workItem)
-
-            // 2. Synthesize line-based scroll wheel with Command modifier for browsers/editors
-            if let zoomEvent = CGEvent(
-                scrollWheelEvent2Source: nil,
-                units: .line,
-                wheelCount: 1,
-                wheel1: Int32(steps * 2),
-                wheel2: 0,
-                wheel3: 0
-            ) {
-                zoomEvent.flags = .maskCommand
-                zoomEvent.post(tap: .cghidEventTap)
-            }
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.12, execute: workItem)
             return
 
         case .rightClick:

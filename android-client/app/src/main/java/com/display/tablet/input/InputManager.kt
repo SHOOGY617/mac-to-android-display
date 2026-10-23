@@ -209,7 +209,6 @@ class InputManager(private val streamClient: StreamClient) {
                             pinchAccumulator -= steps * zoomThreshold
                             val normX = (midX / width).coerceIn(0f, 1f)
                             val normY = (midY / height).coerceIn(0f, 1f)
-                            Log.d(TAG, "🔍 Pinch Zoom: steps=$steps at ($normX, $normY)")
                             streamClient.sendInput(ACTION_MAGNIFY, normX, normY, steps.toFloat(), 0)
                         }
                     } else if (dMidDist > 1.5f) {
