@@ -18,6 +18,7 @@ public final class InputSynthesizer {
     private var isDragging = false
     private var isPinchActive = false
     private var endPinchWorkItem: DispatchWorkItem?
+    public var onSpaceChanged: (() -> Void)?
     
     public init(displayID: CGDirectDisplayID? = nil, displayBounds: CGRect? = nil) {
         self.targetDisplayID = displayID
@@ -142,11 +143,37 @@ public final class InputSynthesizer {
             return
 
         case .appExpose:
-            // 3-finger swipe DOWN: Application Windows (Ctrl + Down Arrow)
+            // 3-finger swipe DOWN: Application Windows or dismiss Mission Control
             let centerPoint = CGPoint(x: currentBounds.midX, y: currentBounds.midY)
             CGWarpMouseCursorPosition(centerPoint)
-            print("[Input] ⚡️ App Exposé triggered!")
-            synthesizeKeyShortcut(virtualKey: 0x7D, flags: .maskControl)
+            print("[Input] ⚡️ 3-finger Swipe Down triggered!")
+
+            // 1. Send Escape key (0x35) to dismiss Mission Control if it was open
+            let src = CGEventSource(stateID: .hidSystemState)
+            if let escDown = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: true),
+               let escUp = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false) {
+                escDown.post(tap: .cghidEventTap)
+                escUp.post(tap: .cghidEventTap)
+            }
+
+            // 2. Synthesize proper Control + Down Arrow sequence with physical modifier state
+            let ctrlKey: CGKeyCode = 0x3B
+            let downArrow: CGKeyCode = 0x7D
+            if let cDown = CGEvent(keyboardEventSource: src, virtualKey: ctrlKey, keyDown: true),
+               let dDown = CGEvent(keyboardEventSource: src, virtualKey: downArrow, keyDown: true),
+               let dUp = CGEvent(keyboardEventSource: src, virtualKey: downArrow, keyDown: false),
+               let cUp = CGEvent(keyboardEventSource: src, virtualKey: ctrlKey, keyDown: false) {
+                cDown.flags = .maskControl
+                dDown.flags = .maskControl
+                dUp.flags = .maskControl
+                cUp.flags = []
+                cDown.post(tap: .cghidEventTap)
+                dDown.post(tap: .cghidEventTap)
+                DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.03) {
+                    dUp.post(tap: .cghidEventTap)
+                    cUp.post(tap: .cghidEventTap)
+                }
+            }
             return
 
         case .swipeSpacesLeft:
@@ -257,12 +284,24 @@ public final class InputSynthesizer {
 
             guard let currentIndex = spaces.firstIndex(where: { ($0["ManagedSpaceID"] as? UInt64) == currentID }) else { continue }
 
-            let nextIndex = currentIndex + direction
-            if nextIndex >= 0 && nextIndex < spaces.count {
-                if let nextSpaceID = spaces[nextIndex]["ManagedSpaceID"] as? UInt64 {
-                    let res = CGSManagedDisplaySetCurrentSpace(cid, displayUUID as CFString, nextSpaceID)
-                    print("[Input] Switched space on display \(displayUUID) from \(currentIndex) to \(nextIndex) (res: \(res))")
-                    return res == 0
+            var nextIndex = currentIndex + direction
+            if nextIndex < 0 {
+                nextIndex = spaces.count - 1
+            } else if nextIndex >= spaces.count {
+                nextIndex = 0
+            }
+
+            guard nextIndex != currentIndex else {
+                print("[Input] Only 1 space on display \(displayUUID), nothing to switch to.")
+                return false
+            }
+
+            if let nextSpaceID = spaces[nextIndex]["ManagedSpaceID"] as? UInt64 {
+                let res = CGSManagedDisplaySetCurrentSpace(cid, displayUUID as CFString, nextSpaceID)
+                print("[Input] 🚀 Switched space on display \(displayUUID) from \(currentIndex) to \(nextIndex) (ID: \(nextSpaceID), res: \(res))")
+                if res == 0 {
+                    onSpaceChanged?()
+                    return true
                 }
             }
         }

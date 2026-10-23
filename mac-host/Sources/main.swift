@@ -122,6 +122,10 @@ struct MacDisplayHostApp {
         server.onInputEventReceived = { inputEvent in
             inputSynthesizer.handleInput(event: inputEvent)
         }
+        inputSynthesizer.onSpaceChanged = {
+            print("[Host] Space changed! Requesting immediate full keyframe...")
+            encoder.requestKeyframe()
+        }
         
         // 4. Force full keyframe when tablet connects
         server.onClientConnected = {
