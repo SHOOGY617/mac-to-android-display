@@ -14,6 +14,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.display.tablet.audio.AudioRenderer
 import com.display.tablet.decoder.H264Decoder
 import com.display.tablet.input.InputManager
 import com.display.tablet.network.StreamClient
@@ -23,6 +24,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var statusText: TextView
     private var decoder: H264Decoder? = null
+    private var audioRenderer: AudioRenderer? = null
     private var streamClient: StreamClient? = null
     private var inputManager: InputManager? = null
 
@@ -102,22 +104,34 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         dec.init(2560, 1600)
         this.decoder = dec
 
+        val audio = AudioRenderer(sampleRate = 48000, channels = 2)
+        audio.start()
+        this.audioRenderer = audio
+
         var frameCount = 0
         val client = StreamClient(
             host = "127.0.0.1",
             port = 8080,
-            onFrameReceived = { data, length ->
+            onFrameReceived = { data, length, mimeType ->
                 frameCount++
                 if (frameCount <= 3 || frameCount % 60 == 0) {
-                    android.util.Log.i("MainActivity", "Received frame #$frameCount ($length bytes)")
+                    val codecTag = if (mimeType == android.media.MediaFormat.MIMETYPE_VIDEO_HEVC) "H.265/HEVC" else "H.264"
+                    android.util.Log.i("MainActivity", "Received $codecTag frame #$frameCount ($length bytes)")
                 }
-                dec.decodeNalu(data, length)
+                dec.decodeNalu(data, length, mimeType)
+            },
+            onAudioReceived = { pcmData, length ->
+                audio.playPcm(pcmData, 0, length)
             },
             onConnectionStateChanged = { connected, message ->
                 runOnUiThread {
                     statusText.text = message
                     if (connected) {
                         statusText.animate().alpha(0f).setDuration(1000).start()
+                        val isPortrait = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+                        val streamWidth = if (isPortrait) 1600 else 2560
+                        val streamHeight = if (isPortrait) 2560 else 1600
+                        streamClient?.sendOrientation(streamWidth, streamHeight)
                     } else {
                         statusText.alpha = 1f
                     }
@@ -133,18 +147,37 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         client.start(lifecycleScope)
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        hideSystemUI()
+        val isPortrait = newConfig.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        val streamWidth = if (isPortrait) 1600 else 2560
+        val streamHeight = if (isPortrait) 2560 else 1600
+        android.util.Log.i("MainActivity", "🔄 Tablet rotated: isPortrait=$isPortrait -> notifying host ${streamWidth}x${streamHeight}")
+        streamClient?.sendOrientation(streamWidth, streamHeight)
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        val isPortrait = height > width
+        val streamWidth = if (isPortrait) 1600 else 2560
+        val streamHeight = if (isPortrait) 2560 else 1600
+        streamClient?.sendOrientation(streamWidth, streamHeight)
+    }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         streamClient?.stop()
         streamClient = null
         decoder?.release()
         decoder = null
+        audioRenderer?.stop()
+        audioRenderer = null
     }
 
     override fun onDestroy() {
         super.onDestroy()
         streamClient?.stop()
         decoder?.release()
+        audioRenderer?.stop()
+        audioRenderer = null
     }
 }

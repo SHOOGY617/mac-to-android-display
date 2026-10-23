@@ -21,6 +21,8 @@ struct MacDisplayHostApp {
         var isExtended: Bool = false
         var hiDPI: Bool = true
         var displayName: String = "Galaxy Tab S7"
+        var enableAudio: Bool = true
+        var videoCodec: VideoCodec = .hevc
         
         // Simple CLI argument parsing
         for i in 0..<args.count {
@@ -34,6 +36,13 @@ struct MacDisplayHostApp {
             if args[i] == "--mirror" { isExtended = false }
             if args[i] == "--name", i + 1 < args.count { displayName = args[i + 1] }
             if args[i] == "--hidpi", i + 1 < args.count, let val = Bool(args[i + 1]) { hiDPI = val }
+            if args[i] == "--no-audio" { enableAudio = false }
+            if args[i] == "--audio" { enableAudio = true }
+            if args[i] == "--codec", i + 1 < args.count {
+                videoCodec = (args[i + 1].lowercased() == "h264" || args[i + 1].lowercased() == "avc") ? .h264 : .hevc
+            }
+            if args[i] == "--hevc" || args[i] == "--h265" { videoCodec = .hevc }
+            if args[i] == "--h264" || args[i] == "--avc" { videoCodec = .h264 }
         }
         
         // Setup clean exit handling
@@ -78,6 +87,8 @@ struct MacDisplayHostApp {
         print("  - Stream Resolution: \(width)x\(height)")
         print("  - Target Refresh Rate: \(fps) FPS")
         print("  - Target Bitrate: \(bitrate / 1_000_000) Mbps")
+        print("  - Video Codec: \(videoCodec.rawValue.uppercased()) (Apple Silicon Hardware Accelerated)")
+        print("  - Audio Streaming: \(enableAudio ? "Enabled (48kHz Stereo)" : "Disabled")")
         if let id = targetDisplayID {
             print("  - Target Virtual Display ID: \(id)")
         } else {
@@ -87,18 +98,19 @@ struct MacDisplayHostApp {
         print("------------------------------------------------------")
         
         let server = TCPServer(port: port)
-        let encoder = H264Encoder(width: Int32(width), height: Int32(height), fps: fps, bitrate: bitrate)
+        let encoder = H264Encoder(width: Int32(width), height: Int32(height), fps: fps, bitrate: bitrate, codec: videoCodec)
         let capture = ScreenCaptureEngine(
             displayID: targetDisplayID,
             displayIndex: displayIndex,
             width: width,
             height: height,
-            fps: fps
+            fps: fps,
+            capturesAudio: enableAudio
         )
         let inputSynthesizer = InputSynthesizer(displayID: targetDisplayID)
         
         // Connect Pipeline:
-        // 1. Capture -> Encoder
+        // 1. Video: Capture -> Encoder
         var captureCount = 0
         capture.onFrameCaptured = { pixelBuffer, pts in
             captureCount += 1
@@ -108,22 +120,52 @@ struct MacDisplayHostApp {
             encoder.encode(pixelBuffer: pixelBuffer, presentationTimestamp: pts)
         }
         
-        // 2. Encoder -> Server
+        // 2. Video: Encoder -> Server
         var encodedCount = 0
+        let isHEVC = encoder.codec == .hevc
         encoder.onNALUEncoded = { naluData in
             encodedCount += 1
             if encodedCount <= 3 || encodedCount % 60 == 0 {
                 print("[Host] NALU encoded #\(encodedCount), size: \(naluData.count) bytes")
             }
-            server.sendVideoFrame(naluData: naluData)
+            server.sendVideoFrame(naluData: naluData, isHEVC: isHEVC)
+        }
+
+        // 3. Audio: Capture -> Server
+        if enableAudio {
+            var audioPacketCount = 0
+            capture.onAudioCaptured = { pcmData in
+                audioPacketCount += 1
+                if audioPacketCount == 1 || audioPacketCount % 500 == 0 {
+                    print("[Host] Audio packet #\(audioPacketCount), size: \(pcmData.count) bytes")
+                }
+                server.sendAudioFrame(pcmData: pcmData)
+            }
         }
         
-        // 3. Server Input -> InputSynthesizer (Touch/S-Pen to Mac mouse/pen)
+        // 4. Server Input -> InputSynthesizer (Touch/S-Pen to Mac mouse/pen)
         server.onInputEventReceived = { inputEvent in
             inputSynthesizer.handleInput(event: inputEvent)
         }
         
-        // 4. Force full keyframe when tablet connects
+        // 5. Dynamic Orientation Changes (Landscape <-> Portrait)
+        server.onOrientationChanged = { newWidth, newHeight in
+            print("\n[Host] 🔄 Tablet orientation change received: \(newWidth)x\(newHeight)")
+            Task {
+                MacDisplayHostApp.virtualDisplayManager?.setOrientation(
+                    width: Int(newWidth),
+                    height: Int(newHeight),
+                    fps: Double(fps)
+                )
+                try? await capture.updateResolution(width: Int(newWidth), height: Int(newHeight))
+                encoder.updateResolution(width: Int32(newWidth), height: Int32(newHeight))
+                if let id = targetDisplayID {
+                    inputSynthesizer.updateDisplay(id: id)
+                }
+            }
+        }
+        
+        // 6. Force full keyframe when tablet connects
         server.onClientConnected = {
             print("[Host] Tablet connected! Requesting immediate full keyframe from encoder...")
             encoder.requestKeyframe()

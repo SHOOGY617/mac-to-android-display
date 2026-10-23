@@ -6,37 +6,56 @@ import android.os.Build
 import android.util.Log
 import android.view.Surface
 
+typealias VideoDecoder = H264Decoder
+
 class H264Decoder(private val surface: Surface) {
     companion object {
-        private const val TAG = "H264Decoder"
-        private const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC
+        private const val TAG = "VideoDecoder"
     }
 
     private var codec: MediaCodec? = null
     private var isConfigured = false
+    private var currentMimeType: String = ""
+    private var currentWidth: Int = 2560
+    private var currentHeight: Int = 1600
     private val bufferInfo = MediaCodec.BufferInfo()
 
-    fun init(width: Int = 2560, height: Int = 1600) {
+    fun init(width: Int = 2560, height: Int = 1600, mimeType: String = MediaFormat.MIMETYPE_VIDEO_HEVC) {
+        if (isConfigured && currentMimeType == mimeType && currentWidth == width && currentHeight == height) {
+            return
+        }
+        
+        release()
+
         try {
-            val format = MediaFormat.createVideoFormat(MIME_TYPE, width, height)
+            this.currentWidth = width
+            this.currentHeight = height
+            this.currentMimeType = mimeType
+
+            val format = MediaFormat.createVideoFormat(mimeType, width, height)
             
             // Android 11+ Low latency configuration
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
             
-            val decoder = MediaCodec.createDecoderByType(MIME_TYPE)
+            val decoder = MediaCodec.createDecoderByType(mimeType)
             decoder.configure(format, surface, null, 0)
             decoder.start()
             this.codec = decoder
             this.isConfigured = true
-            Log.i(TAG, "Hardware H264 Decoder initialized for ${width}x${height} with low latency")
+            val codecName = if (mimeType == MediaFormat.MIMETYPE_VIDEO_HEVC) "H.265 / HEVC" else "H.264 / AVC"
+            Log.i(TAG, "Hardware $codecName Decoder initialized for ${width}x${height} with low latency")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize MediaCodec: ${e.message}", e)
+            Log.e(TAG, "Failed to initialize MediaCodec ($mimeType): ${e.message}", e)
         }
     }
 
-    fun decodeNalu(data: ByteArray, length: Int = data.size, presentationTimeUs: Long = System.nanoTime() / 1000) {
+    fun decodeNalu(data: ByteArray, length: Int = data.size, mimeType: String = currentMimeType, presentationTimeUs: Long = System.nanoTime() / 1000) {
+        if (!isConfigured || (mimeType.isNotEmpty() && mimeType != currentMimeType)) {
+            init(currentWidth, currentHeight, if (mimeType.isNotEmpty()) mimeType else MediaFormat.MIMETYPE_VIDEO_HEVC)
+        }
+
         val decoder = codec ?: return
         if (!isConfigured) return
 

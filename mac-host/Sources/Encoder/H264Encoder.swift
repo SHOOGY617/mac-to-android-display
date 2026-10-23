@@ -2,10 +2,18 @@ import Foundation
 import VideoToolbox
 import CoreMedia
 
+public enum VideoCodec: String {
+    case h264 = "h264"
+    case hevc = "hevc"
+}
+
+public typealias VideoEncoder = H264Encoder
+
 public final class H264Encoder {
     private var compressionSession: VTCompressionSession?
-    private let width: Int32
-    private let height: Int32
+    public let codec: VideoCodec
+    private var width: Int32
+    private var height: Int32
     private let fps: Int32
     private let bitrate: Int32
     
@@ -16,11 +24,12 @@ public final class H264Encoder {
     private var spsData: Data?
     private var ppsData: Data?
     
-    public init(width: Int32, height: Int32, fps: Int32 = 60, bitrate: Int32 = 25_000_000) {
+    public init(width: Int32, height: Int32, fps: Int32 = 60, bitrate: Int32 = 25_000_000, codec: VideoCodec = .hevc) {
         self.width = width
         self.height = height
         self.fps = fps
         self.bitrate = bitrate
+        self.codec = codec
         setupSession()
     }
     
@@ -29,6 +38,7 @@ public final class H264Encoder {
     }
     
     private func setupSession() {
+        stop()
         let callback: VTCompressionOutputCallback = { outputCallbackRefCon, _, status, flags, sampleBuffer in
             guard status == noErr, let sampleBuffer = sampleBuffer, let refCon = outputCallbackRefCon else {
                 return
@@ -37,11 +47,14 @@ public final class H264Encoder {
             encoder.handleSampleBuffer(sampleBuffer, flags: flags)
         }
         
+        let codecType = codec == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
+        let profileLevel = codec == .hevc ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel
+        
         let status = VTCompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             width: width,
             height: height,
-            codecType: kCMVideoCodecType_H264,
+            codecType: codecType,
             encoderSpecification: nil,
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
@@ -51,13 +64,13 @@ public final class H264Encoder {
         )
         
         guard status == noErr, let session = compressionSession else {
-            print("[Encoder] Failed to create VTCompressionSession: \(status)")
+            print("[Encoder] Failed to create VTCompressionSession for \(codec.rawValue): \(status)")
             return
         }
         
         // Optimize for ultra-low latency real-time streaming
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: profileLevel)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: (fps * 2) as CFNumber)
@@ -69,7 +82,7 @@ public final class H264Encoder {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         
         VTCompressionSessionPrepareToEncodeFrames(session)
-        print("[Encoder] H.264 Encoder initialized: \(width)x\(height) @ \(fps)fps, \(bitrate / 1_000_000) Mbps")
+        print("[Encoder] \(codec.rawValue.uppercased()) Hardware Encoder initialized: \(width)x\(height) @ \(fps)fps, \(bitrate / 1_000_000) Mbps")
     }
     
     public func requestKeyframe() {
@@ -111,26 +124,59 @@ public final class H264Encoder {
         
         var packetData = Data()
         
-        // On keyframes, extract and prepend SPS and PPS in Annex B format
+        // On keyframes, extract and prepend parameter sets (VPS/SPS/PPS for HEVC, SPS/PPS for H.264)
         if isKeyframe {
             if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
                 var parameterSetCount = 0
-                CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, parameterSetIndex: 0, parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: &parameterSetCount, nalUnitHeaderLengthOut: nil)
-                
-                for i in 0..<parameterSetCount {
-                    var pointer: UnsafePointer<UInt8>?
-                    var size: Int = 0
-                    let status = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                if codec == .hevc {
+                    CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
                         formatDesc,
-                        parameterSetIndex: i,
-                        parameterSetPointerOut: &pointer,
-                        parameterSetSizeOut: &size,
-                        parameterSetCountOut: nil,
+                        parameterSetIndex: 0,
+                        parameterSetPointerOut: nil,
+                        parameterSetSizeOut: nil,
+                        parameterSetCountOut: &parameterSetCount,
                         nalUnitHeaderLengthOut: nil
                     )
-                    if status == noErr, let ptr = pointer, size > 0 {
-                        packetData.append(startCode)
-                        packetData.append(ptr, count: size)
+                    for i in 0..<parameterSetCount {
+                        var pointer: UnsafePointer<UInt8>?
+                        var size: Int = 0
+                        let status = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                            formatDesc,
+                            parameterSetIndex: i,
+                            parameterSetPointerOut: &pointer,
+                            parameterSetSizeOut: &size,
+                            parameterSetCountOut: nil,
+                            nalUnitHeaderLengthOut: nil
+                        )
+                        if status == noErr, let ptr = pointer, size > 0 {
+                            packetData.append(startCode)
+                            packetData.append(ptr, count: size)
+                        }
+                    }
+                } else {
+                    CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                        formatDesc,
+                        parameterSetIndex: 0,
+                        parameterSetPointerOut: nil,
+                        parameterSetSizeOut: nil,
+                        parameterSetCountOut: &parameterSetCount,
+                        nalUnitHeaderLengthOut: nil
+                    )
+                    for i in 0..<parameterSetCount {
+                        var pointer: UnsafePointer<UInt8>?
+                        var size: Int = 0
+                        let status = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                            formatDesc,
+                            parameterSetIndex: i,
+                            parameterSetPointerOut: &pointer,
+                            parameterSetSizeOut: &size,
+                            parameterSetCountOut: nil,
+                            nalUnitHeaderLengthOut: nil
+                        )
+                        if status == noErr, let ptr = pointer, size > 0 {
+                            packetData.append(startCode)
+                            packetData.append(ptr, count: size)
+                        }
                     }
                 }
             }
@@ -164,6 +210,15 @@ public final class H264Encoder {
         if !packetData.isEmpty {
             onNALUEncoded?(packetData)
         }
+    }
+    
+    public func updateResolution(width: Int32, height: Int32) {
+        guard self.width != width || self.height != height else { return }
+        print("[Encoder] 🔄 Updating encoder resolution to \(width)x\(height)")
+        self.width = width
+        self.height = height
+        setupSession()
+        requestKeyframe()
     }
     
     public func stop() {

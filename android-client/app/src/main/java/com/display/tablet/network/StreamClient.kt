@@ -14,13 +14,18 @@ import java.nio.ByteOrder
 class StreamClient(
     private val host: String = "127.0.0.1",
     private val port: Int = 8080,
-    private val onFrameReceived: (ByteArray, Int) -> Unit,
+    private val onFrameReceived: (ByteArray, Int, String) -> Unit,
+    private val onAudioReceived: ((ByteArray, Int) -> Unit)? = null,
     private val onConnectionStateChanged: (Boolean, String) -> Unit
 ) {
     companion object {
         private const val TAG = "StreamClient"
-        private const val PACKET_VIDEO: Byte = 0x01
+        private const val PACKET_VIDEO_H264: Byte = 0x01
+        private const val PACKET_DISPLAY_INFO: Byte = 0x02
+        private const val PACKET_AUDIO: Byte = 0x03
+        private const val PACKET_VIDEO_HEVC: Byte = 0x04
         private const val PACKET_INPUT: Byte = 0x10
+        private const val PACKET_ORIENTATION: Byte = 0x11
     }
 
     private var socket: Socket? = null
@@ -32,8 +37,9 @@ class StreamClient(
     // Non-blocking input queue: touch events never block the UI thread
     private val inputChannel = Channel<ByteArray>(64)
     
-    // Reusable buffer to eliminate 30MB/s of GC allocation churn
+    // Reusable buffers to eliminate GC allocation churn
     private var frameBuffer = ByteArray(1024 * 512)
+    private var audioBuffer = ByteArray(32 * 1024)
 
     fun start(scope: CoroutineScope) {
         if (isRunning) return
@@ -70,14 +76,28 @@ class StreamClient(
 
                     while (isRunning && isActive && !s.isClosed) {
                         val packetType = dis.readByte()
-                        if (packetType == PACKET_VIDEO) {
+                        if (packetType == PACKET_VIDEO_H264 || packetType == PACKET_VIDEO_HEVC) {
                             val length = dis.readInt()
                             if (length in 1..20_000_000) {
                                 if (length > frameBuffer.size) {
                                     frameBuffer = ByteArray(length + 64 * 1024)
                                 }
                                 dis.readFully(frameBuffer, 0, length)
-                                onFrameReceived(frameBuffer, length)
+                                val mimeType = if (packetType == PACKET_VIDEO_HEVC) {
+                                    android.media.MediaFormat.MIMETYPE_VIDEO_HEVC
+                                } else {
+                                    android.media.MediaFormat.MIMETYPE_VIDEO_AVC
+                                }
+                                onFrameReceived(frameBuffer, length, mimeType)
+                            }
+                        } else if (packetType == PACKET_AUDIO) {
+                            val length = dis.readInt()
+                            if (length in 1..200_000) {
+                                if (length > audioBuffer.size) {
+                                    audioBuffer = ByteArray(length + 8 * 1024)
+                                }
+                                dis.readFully(audioBuffer, 0, length)
+                                onAudioReceived?.invoke(audioBuffer, length)
                             }
                         }
                     }
@@ -112,6 +132,26 @@ class StreamClient(
             inputChannel.trySend(bb.array())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to enqueue input: ${e.message}")
+        }
+    }
+
+    fun sendOrientation(width: Int, height: Int) {
+        try {
+            val packet = ByteArray(9)
+            packet[0] = PACKET_ORIENTATION
+            packet[1] = (width ushr 24).toByte()
+            packet[2] = (width ushr 16).toByte()
+            packet[3] = (width ushr 8).toByte()
+            packet[4] = width.toByte()
+            packet[5] = (height ushr 24).toByte()
+            packet[6] = (height ushr 16).toByte()
+            packet[7] = (height ushr 8).toByte()
+            packet[8] = height.toByte()
+
+            inputChannel.trySend(packet)
+            Log.i(TAG, "Sent orientation change to Mac: ${width}x${height}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send orientation: ${e.message}")
         }
     }
 

@@ -188,9 +188,6 @@ public final class InputSynthesizer {
         let screenY = currentBounds.origin.y + CGFloat(event.normalizedY) * currentBounds.height
         let point = CGPoint(x: screenX, y: screenY)
         
-        // Instantly warp system mouse pointer so clicks register under the touched element
-        CGWarpMouseCursorPosition(point)
-        
         var eventType: CGEventType
         let mouseButton: CGMouseButton = .left
         
@@ -198,8 +195,12 @@ public final class InputSynthesizer {
         case .down:
             eventType = .leftMouseDown
             isDragging = true
+            // Instantly snap system mouse pointer to initial touch coordinate
+            CGWarpMouseCursorPosition(point)
         case .move:
             eventType = isDragging ? .leftMouseDragged : .mouseMoved
+            // Do NOT call CGWarpMouseCursorPosition on move: posting cgEvent with mouseCursorPosition
+            // allows macOS WindowServer to compute smooth deltas and apply native trackpad/mouse acceleration curves!
         case .up:
             eventType = .leftMouseUp
             isDragging = false

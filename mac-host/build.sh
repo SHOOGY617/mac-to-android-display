@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+cd "$(dirname "$0")"
+
 echo "==> Compiling MacDisplayHost using swiftc..."
 
 SDK_FLAGS=""

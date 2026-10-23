@@ -257,10 +257,11 @@ class InputManager(private val streamClient: StreamClient) {
             return
         }
 
-        val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
+        val toolType = event.getToolType(0)
+        val isMouseOrStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_MOUSE
 
-        // Stylus: bypass gesture detection for instantaneous low-latency drawing & writing
-        if (isStylus) {
+        // Mouse or Stylus: bypass gesture detection for instantaneous native 1:1 hardware tracking
+        if (isMouseOrStylus) {
             val action = when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> ACTION_DOWN
                 MotionEvent.ACTION_MOVE -> ACTION_MOVE
@@ -270,7 +271,7 @@ class InputManager(private val streamClient: StreamClient) {
             val normX = (event.x / width).coerceIn(0f, 1f)
             val normY = (event.y / height).coerceIn(0f, 1f)
             val pressure = event.pressure.coerceIn(0f, 1f)
-            streamClient.sendInput(action, normX, normY, pressure, 1)
+            streamClient.sendInput(action, normX, normY, pressure, if (toolType == MotionEvent.TOOL_TYPE_STYLUS) 1 else 0)
             return
         }
 
@@ -286,7 +287,8 @@ class InputManager(private val streamClient: StreamClient) {
             }
             MotionEvent.ACTION_MOVE -> {
                 val travel = hypot(event.x - downX, event.y - downY)
-                if (travel > 18f) {
+                // Minimal touch slop (7px) for instantaneous drag initiation without jitter
+                if (travel > 7f) {
                     if (!hasMovedSignificantly) {
                         hasMovedSignificantly = true
                         handler.removeCallbacks(longPressRunnable)

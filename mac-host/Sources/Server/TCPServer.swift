@@ -9,6 +9,7 @@ public final class TCPServer {
     private let port: UInt16
     
     public var onInputEventReceived: ((TabletInputEvent) -> Void)?
+    public var onOrientationChanged: ((UInt32, UInt32) -> Void)?
     public var onClientConnected: (() -> Void)?
     
     public init(port: UInt16 = 8080) {
@@ -76,6 +77,14 @@ public final class TCPServer {
                     }
                     self.receiveNextPacket(from: connection)
                 }
+            } else if packetType == PacketType.orientationChange.rawValue {
+                // Orientation change is 8 bytes: [4 bytes width][4 bytes height]
+                connection.receive(minimumIncompleteLength: 8, maximumLength: 8) { [weak self] orientData, _, _, _ in
+                    if let orientData = orientData, let event = OrientationChangeEvent.parse(from: orientData) {
+                        self?.onOrientationChanged?(event.width, event.height)
+                    }
+                    self?.receiveNextPacket(from: connection)
+                }
             } else {
                 // Unknown packet, continue receiving
                 self.receiveNextPacket(from: connection)
@@ -83,10 +92,10 @@ public final class TCPServer {
         }
     }
     
-    public func sendVideoFrame(naluData: Data) {
+    public func sendVideoFrame(naluData: Data, isHEVC: Bool = false) {
         var packet = Data(capacity: 5 + naluData.count)
-        // 1 byte packet type
-        packet.append(PacketType.videoFrame.rawValue)
+        // 1 byte packet type (0x04 for HEVC / H.265, 0x01 for H.264)
+        packet.append(isHEVC ? PacketType.videoFrameHEVC.rawValue : PacketType.videoFrameH264.rawValue)
         // 4 bytes payload length (big-endian)
         var length = UInt32(naluData.count).bigEndian
         packet.append(Data(bytes: &length, count: 4))
@@ -100,6 +109,28 @@ public final class TCPServer {
             conn.send(content: packet, completion: .contentProcessed { [weak self] error in
                 if let error = error {
                     print("[Server] Send error: \(error)")
+                    self?.removeConnection(conn)
+                }
+            })
+        }
+    }
+    
+    public func sendAudioFrame(pcmData: Data) {
+        guard !activeConnections.isEmpty else { return }
+        
+        var packet = Data(capacity: 5 + pcmData.count)
+        // 1 byte packet type
+        packet.append(PacketType.audioFrame.rawValue)
+        // 4 bytes payload length (big-endian)
+        var length = UInt32(pcmData.count).bigEndian
+        packet.append(Data(bytes: &length, count: 4))
+        // Audio payload
+        packet.append(pcmData)
+        
+        for conn in activeConnections {
+            conn.send(content: packet, completion: .contentProcessed { [weak self] error in
+                if let error = error {
+                    print("[Server] Audio send error: \(error)")
                     self?.removeConnection(conn)
                 }
             })

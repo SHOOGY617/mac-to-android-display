@@ -1,9 +1,24 @@
 import Foundation
 
 public enum PacketType: UInt8 {
-    case videoFrame = 0x01
+    case videoFrameH264 = 0x01
     case displayInfo = 0x02
+    case audioFrame = 0x03
+    case videoFrameHEVC = 0x04
     case inputEvent = 0x10
+    case orientationChange = 0x11
+}
+
+public struct OrientationChangeEvent {
+    public let width: UInt32
+    public let height: UInt32
+    
+    public static func parse(from data: Data) -> OrientationChangeEvent? {
+        guard data.count >= 8 else { return nil }
+        let w = UInt32(bigEndian: data.subdata(in: 0..<4).withUnsafeBytes { $0.load(as: UInt32.self) })
+        let h = UInt32(bigEndian: data.subdata(in: 4..<8).withUnsafeBytes { $0.load(as: UInt32.self) })
+        return OrientationChangeEvent(width: w, height: h)
+    }
 }
 
 public enum InputToolType: UInt8 {

@@ -25,8 +25,9 @@ public final class VirtualDisplayManager {
         
         let desc = descClass.init()
         desc.setValue(name, forKey: "name")
-        desc.setValue(width, forKey: "maxPixelsWide")
-        desc.setValue(height, forKey: "maxPixelsHigh")
+        let maxDim = max(width, height)
+        desc.setValue(maxDim, forKey: "maxPixelsWide")
+        desc.setValue(maxDim, forKey: "maxPixelsHigh")
         desc.setValue(CGSize(width: 260, height: 162), forKey: "sizeInMillimeters")
         desc.setValue(0x1234, forKey: "vendorID")
         desc.setValue(0x5678, forKey: "productID")
@@ -108,6 +109,51 @@ public final class VirtualDisplayManager {
         print("[VirtualDisplay] Positioned to the RIGHT of main screen at x=\(Int(activeBounds.origin.x))")
         
         return id
+    }
+    
+    @discardableResult
+    public func setOrientation(width: Int, height: Int, fps: Double = 120.0, hiDPI: Bool = true) -> Bool {
+        guard let display = virtualDisplay,
+              let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
+              let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else {
+            return false
+        }
+        
+        typealias ModeInitFunc = @convention(c) (AnyObject, Selector, UInt, UInt, Double) -> AnyObject
+        guard let modeAlloc = modeClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() else { return false }
+        let sel = NSSelectorFromString("initWithWidth:height:refreshRate:")
+        let method = modeAlloc.method(for: sel)
+        let modeInit = unsafeBitCast(method, to: ModeInitFunc.self)
+        
+        // Use 2x Retina points for UI scaling:
+        // Landscape (2560x1600 -> 1280x800)
+        // Portrait  (1600x2560 -> 800x1280)
+        let uiWidth = UInt(width > height ? 1280 : 800)
+        let uiHeight = UInt(width > height ? 800 : 1280)
+        let mode = modeInit(modeAlloc, sel, uiWidth, uiHeight, fps)
+        
+        let settings = settingsClass.init()
+        settings.setValue([mode], forKey: "modes")
+        settings.setValue(hiDPI ? 1 : 0, forKey: "hiDPI")
+        
+        let applySel = NSSelectorFromString("applySettings:")
+        let applyMethod = display.method(for: applySel)
+        typealias ApplyFunc = @convention(c) (AnyObject, Selector, AnyObject) -> Bool
+        let apply = unsafeBitCast(applyMethod, to: ApplyFunc.self)
+        
+        let success = apply(display, applySel, settings)
+        if success, let id = displayID {
+            // Reconfigure position next to main display
+            var config: CGDisplayConfigRef?
+            if CGBeginDisplayConfiguration(&config) == .success, let cfg = config {
+                let mainBounds = CGDisplayBounds(CGMainDisplayID())
+                CGConfigureDisplayOrigin(cfg, id, Int32(mainBounds.maxX), 0)
+                CGCompleteDisplayConfiguration(cfg, .permanently)
+            }
+            let activeBounds = CGDisplayBounds(id)
+            print("[VirtualDisplay] 🔄 Dynamically updated orientation: \(width)x\(height) (UI: \(Int(activeBounds.width))x\(Int(activeBounds.height)))")
+        }
+        return success
     }
     
     public func destroy() {
