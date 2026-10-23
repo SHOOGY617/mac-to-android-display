@@ -4,9 +4,9 @@ import CoreMedia
 
 public final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream?
-    private let targetFPS: Int32
-    private let targetWidth: Int
-    private let targetHeight: Int
+    private var targetFPS: Int32
+    private var targetWidth: Int
+    private var targetHeight: Int
     private let displayIndex: Int
     private let targetDisplayID: CGDirectDisplayID?
     private let capturesAudio: Bool
@@ -173,6 +173,8 @@ public final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelega
     
     public func updateResolution(width: Int, height: Int) async throws {
         guard let stream = stream else { return }
+        self.targetWidth = width
+        self.targetHeight = height
         let newConfig = SCStreamConfiguration()
         newConfig.width = width
         newConfig.height = height
@@ -188,6 +190,26 @@ public final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelega
         }
         try await stream.updateConfiguration(newConfig)
         print("[Capture] 🔄 Updated capture resolution to \(width)x\(height)")
+    }
+    
+    public func updateFPS(fps: Int32) async throws {
+        guard let stream = stream, self.targetFPS != fps else { return }
+        self.targetFPS = fps
+        let newConfig = SCStreamConfiguration()
+        newConfig.width = targetWidth
+        newConfig.height = targetHeight
+        newConfig.minimumFrameInterval = CMTime(value: 1, timescale: fps)
+        newConfig.queueDepth = 3
+        newConfig.showsCursor = true
+        newConfig.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        if capturesAudio {
+            newConfig.capturesAudio = true
+            newConfig.sampleRate = 48000
+            newConfig.channelCount = 2
+            newConfig.excludesCurrentProcessAudio = true
+        }
+        try await stream.updateConfiguration(newConfig)
+        print("[Capture] 🔄 Updated capture refresh rate to \(fps) FPS")
     }
     
     public func stream(_ stream: SCStream, didStopWithError error: Error) {

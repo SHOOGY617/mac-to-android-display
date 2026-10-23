@@ -125,11 +125,9 @@ public final class VirtualDisplayManager {
         let method = modeAlloc.method(for: sel)
         let modeInit = unsafeBitCast(method, to: ModeInitFunc.self)
         
-        // Use 2x Retina points for UI scaling:
-        // Landscape (2560x1600 -> 1280x800)
-        // Portrait  (1600x2560 -> 800x1280)
-        let uiWidth = UInt(width > height ? 1280 : 800)
-        let uiHeight = UInt(width > height ? 800 : 1280)
+        // Use 2x Retina points for UI scaling (e.g. 2560x1600 -> 1280x800, 2880x1800 -> 1440x900)
+        let uiWidth = UInt(width / 2)
+        let uiHeight = UInt(height / 2)
         let mode = modeInit(modeAlloc, sel, uiWidth, uiHeight, fps)
         
         let settings = settingsClass.init()

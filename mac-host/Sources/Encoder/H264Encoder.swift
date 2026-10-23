@@ -11,10 +11,10 @@ public typealias VideoEncoder = H264Encoder
 
 public final class H264Encoder {
     private var compressionSession: VTCompressionSession?
-    public let codec: VideoCodec
+    public private(set) var codec: VideoCodec
     private var width: Int32
     private var height: Int32
-    private let fps: Int32
+    private var fps: Int32
     private let bitrate: Int32
     
     public var onNALUEncoded: ((Data) -> Void)?
@@ -217,6 +217,22 @@ public final class H264Encoder {
         print("[Encoder] 🔄 Updating encoder resolution to \(width)x\(height)")
         self.width = width
         self.height = height
+        setupSession()
+        requestKeyframe()
+    }
+    
+    public func updateFPS(fps: Int32) {
+        guard self.fps != fps else { return }
+        print("[Encoder] 🔄 Updating encoder FPS to \(fps)")
+        self.fps = fps
+        setupSession()
+        requestKeyframe()
+    }
+    
+    public func updateCodec(_ newCodec: VideoCodec) {
+        guard self.codec != newCodec else { return }
+        print("[Encoder] 🔄 Switching video codec to \(newCodec.rawValue.uppercased())")
+        self.codec = newCodec
         setupSession()
         requestKeyframe()
     }

@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import AppKit
 
 @main
 struct MacDisplayHostApp {
@@ -109,6 +110,76 @@ struct MacDisplayHostApp {
         )
         let inputSynthesizer = InputSynthesizer(displayID: targetDisplayID)
         
+        // Active pipeline state tracking
+        var currentWidth = width
+        var currentHeight = height
+        var currentFPS = fps
+        var currentCodec = videoCodec
+        var isAudioActive = enableAudio
+        
+        // Initialize Menu Bar Companion App
+        let menuBar = MenuBarManager(
+            initialWidth: currentWidth,
+            initialHeight: currentHeight,
+            initialFPS: currentFPS,
+            initialCodec: currentCodec,
+            audioEnabled: isAudioActive
+        )
+        menuBar.setup()
+        
+        menuBar.onResolutionChanged = { newW, newH in
+            print("\n[MenuBar] Resolution switched to: \(newW)x\(newH)")
+            currentWidth = newW
+            currentHeight = newH
+            Task {
+                MacDisplayHostApp.virtualDisplayManager?.setOrientation(
+                    width: newW,
+                    height: newH,
+                    fps: Double(currentFPS)
+                )
+                try? await capture.updateResolution(width: newW, height: newH)
+                encoder.updateResolution(width: Int32(newW), height: Int32(newH))
+                if let id = targetDisplayID {
+                    inputSynthesizer.updateDisplay(id: id)
+                }
+                menuBar.updateStats(fps: currentFPS, codec: currentCodec, width: newW, height: newH)
+            }
+        }
+        
+        menuBar.onRefreshRateChanged = { newFPS in
+            print("\n[MenuBar] Refresh rate switched to: \(newFPS) FPS")
+            currentFPS = newFPS
+            Task {
+                MacDisplayHostApp.virtualDisplayManager?.setOrientation(
+                    width: currentWidth,
+                    height: currentHeight,
+                    fps: Double(newFPS)
+                )
+                try? await capture.updateFPS(fps: newFPS)
+                encoder.updateFPS(fps: newFPS)
+                menuBar.updateStats(fps: newFPS, codec: currentCodec, width: currentWidth, height: currentHeight)
+            }
+        }
+        
+        menuBar.onCodecChanged = { newCodec in
+            print("\n[MenuBar] Video codec switched to: \(newCodec.rawValue.uppercased())")
+            currentCodec = newCodec
+            encoder.updateCodec(newCodec)
+            menuBar.updateStats(fps: currentFPS, codec: newCodec, width: currentWidth, height: currentHeight)
+        }
+        
+        menuBar.onAudioToggled = { enabled in
+            print("\n[MenuBar] Audio streaming toggled: \(enabled ? "Enabled" : "Muted")")
+            isAudioActive = enabled
+            menuBar.updateStats(fps: currentFPS, codec: currentCodec, width: currentWidth, height: currentHeight)
+        }
+        
+        menuBar.onQuitRequested = {
+            print("\n[Host] Stopping server via Menu Bar...")
+            MacDisplayHostApp.virtualDisplayManager?.destroy()
+            exit(0)
+        }
+        
         // Connect Pipeline:
         // 1. Video: Capture -> Encoder
         var captureCount = 0
@@ -122,19 +193,19 @@ struct MacDisplayHostApp {
         
         // 2. Video: Encoder -> Server
         var encodedCount = 0
-        let isHEVC = encoder.codec == .hevc
         encoder.onNALUEncoded = { naluData in
             encodedCount += 1
             if encodedCount <= 3 || encodedCount % 60 == 0 {
                 print("[Host] NALU encoded #\(encodedCount), size: \(naluData.count) bytes")
             }
-            server.sendVideoFrame(naluData: naluData, isHEVC: isHEVC)
+            server.sendVideoFrame(naluData: naluData, isHEVC: encoder.codec == .hevc)
         }
 
         // 3. Audio: Capture -> Server
         if enableAudio {
             var audioPacketCount = 0
             capture.onAudioCaptured = { pcmData in
+                guard isAudioActive else { return }
                 audioPacketCount += 1
                 if audioPacketCount == 1 || audioPacketCount % 500 == 0 {
                     print("[Host] Audio packet #\(audioPacketCount), size: \(pcmData.count) bytes")
@@ -151,11 +222,14 @@ struct MacDisplayHostApp {
         // 5. Dynamic Orientation Changes (Landscape <-> Portrait)
         server.onOrientationChanged = { newWidth, newHeight in
             print("\n[Host] 🔄 Tablet orientation change received: \(newWidth)x\(newHeight)")
+            currentWidth = Int(newWidth)
+            currentHeight = Int(newHeight)
+            menuBar.updateStats(fps: currentFPS, codec: currentCodec, width: currentWidth, height: currentHeight)
             Task {
                 MacDisplayHostApp.virtualDisplayManager?.setOrientation(
                     width: Int(newWidth),
                     height: Int(newHeight),
-                    fps: Double(fps)
+                    fps: Double(currentFPS)
                 )
                 try? await capture.updateResolution(width: Int(newWidth), height: Int(newHeight))
                 encoder.updateResolution(width: Int32(newWidth), height: Int32(newHeight))
@@ -165,10 +239,16 @@ struct MacDisplayHostApp {
             }
         }
         
-        // 6. Force full keyframe when tablet connects
+        // 6. Client Connection status
         server.onClientConnected = {
             print("[Host] Tablet connected! Requesting immediate full keyframe from encoder...")
+            menuBar.updateConnectionStatus(connected: true)
             encoder.requestKeyframe()
+        }
+        
+        server.onClientDisconnected = {
+            print("[Host] Tablet disconnected.")
+            menuBar.updateConnectionStatus(connected: false)
         }
         
         Task {
@@ -177,7 +257,7 @@ struct MacDisplayHostApp {
                 try await capture.startCapture()
                 print("\n[Host] Ready! Waiting for Galaxy Tab S7...")
                 print("[Host] Make sure you ran: adb reverse tcp:\(port) tcp:\(port)")
-                print("Press Ctrl+C to terminate.\n")
+                print("Press Ctrl+C or use the macOS Menu Bar item to terminate.\n")
             } catch {
                 print("[Host] Failed to start services: \(error.localizedDescription)")
                 MacDisplayHostApp.virtualDisplayManager?.destroy()
@@ -185,7 +265,7 @@ struct MacDisplayHostApp {
             }
         }
         
-        // Run main runloop to keep process alive and pump virtual display events
-        RunLoop.main.run()
+        // Run Cocoa application event loop so Menu Bar item handles clicks and displays menus
+        NSApplication.shared.run()
     }
 }

@@ -20,6 +20,7 @@ swiftc $SDK_FLAGS -parse-as-library \
     Sources/Server/TCPServer.swift \
     Sources/VirtualDisplay/VirtualDisplayHelper.swift \
     Sources/VirtualDisplay/VirtualDisplayManager.swift \
+    Sources/UI/MenuBarManager.swift \
     Sources/main.swift \
     -o MacDisplayHost \
     -framework ScreenCaptureKit \

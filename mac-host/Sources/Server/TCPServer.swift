@@ -11,6 +11,7 @@ public final class TCPServer {
     public var onInputEventReceived: ((TabletInputEvent) -> Void)?
     public var onOrientationChanged: ((UInt32, UInt32) -> Void)?
     public var onClientConnected: (() -> Void)?
+    public var onClientDisconnected: (() -> Void)?
     
     public init(port: UInt16 = 8080) {
         self.port = port
@@ -141,6 +142,9 @@ public final class TCPServer {
         connection.cancel()
         activeConnections.removeAll { $0 === connection }
         print("[Server] Client disconnected. Active clients: \(activeConnections.count)")
+        if activeConnections.isEmpty {
+            onClientDisconnected?()
+        }
     }
     
     public func stop() {
