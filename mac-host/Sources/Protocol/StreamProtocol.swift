@@ -16,6 +16,12 @@ public enum InputAction: UInt8 {
     case move = 1
     case up = 2
     case scroll = 3
+    case rightClick = 4
+    case magnify = 5
+    case missionControl = 6
+    case appExpose = 7
+    case swipeSpacesLeft = 8
+    case swipeSpacesRight = 9
 }
 
 public struct TabletInputEvent {

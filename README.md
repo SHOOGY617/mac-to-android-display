@@ -105,8 +105,22 @@ To mirror your primary display instead:
 
 ---
 
-## S-Pen & Touch Support
+## Touch Gestures & S-Pen Support
 
-The app detects whether you are using your finger or the **S-Pen**:
-* **Finger Touches**: Transmitted as mouse pointer clicks and drags.
-* **S-Pen**: Transmitted with continuous **pressure sensitivity** (`tabletPointPressure`), enabling drawing in apps like Photoshop, Illustrator, Blender, and Affinity Photo on your Mac!
+The system provides full trackpad-grade multi-touch gestures and hardware stylus passthrough:
+
+### Multi-Touch Gestures (No S-Pen Needed)
+* **Single Tap**: Instant crisp primary left-click under your finger (`leftMouseDown` / `leftMouseUp` with AppKit `clickState = 1`).
+* **Tap & Drag**: Smooth window dragging, text selection, and UI slider adjustments at 120Hz.
+* **Long Press (Hold 450ms)**: Right-click context menu at finger location with haptic tick.
+* **Two-Finger Tap**: Secondary right-click at the midpoint between fingers.
+* **Two-Finger Drag**: Natural 2D scrolling (vertical + horizontal) with momentum.
+* **Two-Finger Pinch / Spread**: Smooth zoom in / zoom out centered at your pinch focal point.
+* **Three-Finger Swipe Up**: Trigger **Mission Control** (`Ctrl + ↑`).
+* **Three-Finger Swipe Down**: Trigger **App Exposé / Application Windows** (`Ctrl + ↓`).
+* **Three-Finger Swipe Left**: Switch to **Next Desktop / Space** (`Ctrl + →`).
+* **Three-Finger Swipe Right**: Switch to **Previous Desktop / Space** (`Ctrl + ←`).
+
+### S-Pen / Stylus
+* Automatic detection bypassing gesture delays for direct low-latency pen tracking.
+* Continuous **pressure sensitivity** (`tabletPointPressure`), enabling drawing in Photoshop, Illustrator, Blender, and Affinity Photo on macOS.

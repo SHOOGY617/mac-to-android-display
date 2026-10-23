@@ -25,7 +25,8 @@ public final class InputSynthesizer {
     public func handleInput(event: TabletInputEvent) {
         let currentBounds = targetDisplayID.map { CGDisplayBounds($0) } ?? targetDisplayBounds
         
-        if event.action == .scroll {
+        switch event.action {
+        case .scroll:
             // Scroll delta values passed in normalizedX (deltaX) and normalizedY (deltaY)
             let scrollY = Int32(event.normalizedY)
             let scrollX = Int32(event.normalizedX)
@@ -40,6 +41,77 @@ public final class InputSynthesizer {
                 scrollEvent.post(tap: .cghidEventTap)
             }
             return
+
+        case .magnify:
+            // Pinch-to-zoom: focal point in normalizedX/Y, zoom amount in pressure
+            let screenX = currentBounds.origin.x + CGFloat(event.normalizedX) * currentBounds.width
+            let screenY = currentBounds.origin.y + CGFloat(event.normalizedY) * currentBounds.height
+            let point = CGPoint(x: screenX, y: screenY)
+            CGWarpMouseCursorPosition(point)
+
+            let zoomAmount = Int32(event.pressure)
+            if let zoomEvent = CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: .pixel,
+                wheelCount: 1,
+                wheel1: zoomAmount,
+                wheel2: 0,
+                wheel3: 0
+            ) {
+                zoomEvent.flags = .maskCommand
+                zoomEvent.post(tap: .cghidEventTap)
+            }
+            return
+
+        case .rightClick:
+            // Two-finger tap or long press: context click at coordinates
+            let screenX = currentBounds.origin.x + CGFloat(event.normalizedX) * currentBounds.width
+            let screenY = currentBounds.origin.y + CGFloat(event.normalizedY) * currentBounds.height
+            let point = CGPoint(x: screenX, y: screenY)
+            CGWarpMouseCursorPosition(point)
+
+            if let down = CGEvent(
+                mouseEventSource: nil,
+                mouseType: .rightMouseDown,
+                mouseCursorPosition: point,
+                mouseButton: .right
+            ), let up = CGEvent(
+                mouseEventSource: nil,
+                mouseType: .rightMouseUp,
+                mouseCursorPosition: point,
+                mouseButton: .right
+            ) {
+                down.setIntegerValueField(.mouseEventClickState, value: 1)
+                up.setIntegerValueField(.mouseEventClickState, value: 1)
+                down.post(tap: .cghidEventTap)
+                DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.015) {
+                    up.post(tap: .cghidEventTap)
+                }
+            }
+            return
+
+        case .missionControl:
+            // 3-finger swipe UP: Mission Control (Ctrl + Up Arrow)
+            synthesizeKeyShortcut(virtualKey: 0x7E, flags: .maskControl)
+            return
+
+        case .appExpose:
+            // 3-finger swipe DOWN: Application Windows (Ctrl + Down Arrow)
+            synthesizeKeyShortcut(virtualKey: 0x7D, flags: .maskControl)
+            return
+
+        case .swipeSpacesLeft:
+            // 3-finger swipe RIGHT: Switch to space on the left (Ctrl + Left Arrow)
+            synthesizeKeyShortcut(virtualKey: 0x7B, flags: .maskControl)
+            return
+
+        case .swipeSpacesRight:
+            // 3-finger swipe LEFT: Switch to space on the right (Ctrl + Right Arrow)
+            synthesizeKeyShortcut(virtualKey: 0x7C, flags: .maskControl)
+            return
+
+        case .down, .move, .up:
+            break
         }
         
         let screenX = currentBounds.origin.x + CGFloat(event.normalizedX) * currentBounds.width
@@ -61,7 +133,7 @@ public final class InputSynthesizer {
         case .up:
             eventType = .leftMouseUp
             isDragging = false
-        case .scroll:
+        default:
             return
         }
         
@@ -84,5 +156,17 @@ public final class InputSynthesizer {
         }
         
         cgEvent.post(tap: .cghidEventTap)
+    }
+
+    private func synthesizeKeyShortcut(virtualKey: CGKeyCode, flags: CGEventFlags) {
+        let src = CGEventSource(stateID: .hidSystemState)
+        guard let down = CGEvent(keyboardEventSource: src, virtualKey: virtualKey, keyDown: true),
+              let up = CGEvent(keyboardEventSource: src, virtualKey: virtualKey, keyDown: false) else { return }
+        down.flags = flags
+        up.flags = flags
+        down.post(tap: .cghidEventTap)
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.025) {
+            up.post(tap: .cghidEventTap)
+        }
     }
 }
