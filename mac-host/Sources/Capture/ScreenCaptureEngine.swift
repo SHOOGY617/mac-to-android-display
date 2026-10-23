@@ -8,12 +8,14 @@ public final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelega
     private let targetWidth: Int
     private let targetHeight: Int
     private let displayIndex: Int
+    private let targetDisplayID: CGDirectDisplayID?
     
     public var onFrameCaptured: ((CVPixelBuffer, CMTime) -> Void)?
     
     private let captureQueue = DispatchQueue(label: "com.display.captureQueue", qos: .userInteractive)
     
-    public init(displayIndex: Int = 0, width: Int = 2560, height: Int = 1600, fps: Int32 = 60) {
+    public init(displayID: CGDirectDisplayID? = nil, displayIndex: Int = 0, width: Int = 2560, height: Int = 1600, fps: Int32 = 60) {
+        self.targetDisplayID = displayID
         self.displayIndex = displayIndex
         self.targetWidth = width
         self.targetHeight = height
@@ -22,16 +24,37 @@ public final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelega
     }
     
     public func startCapture() async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        var content: SCShareableContent?
+        var selectedDisplay: SCDisplay?
         
-        guard !content.displays.isEmpty else {
-            throw NSError(domain: "ScreenCaptureEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "No displays found"])
+        // Retry for up to 2 seconds if looking for a specific displayID
+        for _ in 0..<15 {
+            let candidate = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            if let targetID = targetDisplayID {
+                if let matched = candidate.displays.first(where: { $0.displayID == targetID }) {
+                    content = candidate
+                    selectedDisplay = matched
+                    break
+                }
+            } else if !candidate.displays.isEmpty {
+                content = candidate
+                selectedDisplay = displayIndex < candidate.displays.count ? candidate.displays[displayIndex] : candidate.displays[0]
+                break
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
         }
         
-        let selectedDisplay = displayIndex < content.displays.count ? content.displays[displayIndex] : content.displays[0]
-        print("[Capture] Selected Display: ID \(selectedDisplay.displayID), Resolution \(selectedDisplay.width)x\(selectedDisplay.height)")
+        guard content != nil, let displayToCapture = selectedDisplay else {
+            throw NSError(
+                domain: "ScreenCaptureEngine",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Target display \(targetDisplayID.map { "ID \($0)" } ?? "index \(displayIndex)") not found"]
+            )
+        }
         
-        let filter = SCContentFilter(display: selectedDisplay, excludingWindows: [])
+        print("[Capture] Selected Display: ID \(displayToCapture.displayID), Resolution: \(displayToCapture.width)x\(displayToCapture.height)")
+        
+        let filter = SCContentFilter(display: displayToCapture, excludingWindows: [])
         
         let config = SCStreamConfiguration()
         config.width = targetWidth
@@ -39,7 +62,6 @@ public final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelega
         config.minimumFrameInterval = CMTime(value: 1, timescale: targetFPS)
         config.queueDepth = 3
         config.showsCursor = true
-        // NV12 format is hardware native for VideoToolbox H.264 encoder
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         
         let scStream = SCStream(filter: filter, configuration: config, delegate: self)
@@ -59,6 +81,10 @@ public final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelega
         
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         onFrameCaptured?(imageBuffer, pts)
+    }
+    
+    public func stream(_ stream: SCStream, didStopWithError error: Error) {
+        print("[Capture] SCStream stopped with error: \(error.localizedDescription)")
     }
     
     public func stop() async {

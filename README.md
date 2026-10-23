@@ -84,21 +84,24 @@ Open the **Mac Display** app on your Galaxy Tab S7. It will immediately connect 
 
 ## Extended Virtual Display (Using Tablet as 2nd Screen)
 
-By default, `MacDisplayHost` captures display index `0` (mirroring your primary screen). To use your tablet as a true **extended monitor**:
+`MacDisplayHost` has built-in support for creating an independent, native macOS virtual screen without needing any third-party drivers or dummy plugs!
 
-### Option A: Open-Source Virtual Display (Recommended)
-You can create an independent 2560×1600 virtual screen using [BetterDisplay CLI](https://github.com/waydabber/BetterDisplay):
+### Built-in Native Extended Display (Recommended)
+Simply pass the `--extended` flag:
 ```bash
-# Create a virtual display matching Tab S7 16:10 aspect ratio
-betterdisplaycli create -nam="Galaxy Tab S7" -res=2560x1600
-```
-Then run the host targeting that new display:
-```bash
-swift run MacDisplayHost --display 1
-```
+# Launch server with an independent 2560x1600 virtual screen at 60/120Hz
+./mac-host/MacDisplayHost --extended
 
-### Option B: Built-in macOS Native Screen Sharing Driver
-You can also enable a virtual display using Apple's DriverKit `IOUserScreenshareDriver` or a dummy HDMI plug configured to 2560×1600.
+# Custom FPS or Bitrate:
+./mac-host/MacDisplayHost --extended --fps 120 --bitrate 30
+```
+macOS will immediately register a secondary monitor named **"Galaxy Tab S7"** in **System Settings > Displays**, allowing you to drag windows onto the tablet and arrange its position relative to your Mac.
+
+### Mirror Mode
+To mirror your primary display instead:
+```bash
+./mac-host/MacDisplayHost --mirror
+```
 
 ---
 

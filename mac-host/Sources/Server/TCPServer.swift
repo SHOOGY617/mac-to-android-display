@@ -4,6 +4,7 @@ import Network
 public final class TCPServer {
     private var listener: NWListener?
     private var activeConnections: [NWConnection] = []
+    private var latestVideoPacket: Data?
     private let queue = DispatchQueue(label: "com.display.tcpServer", qos: .userInteractive)
     private let port: UInt16
     
@@ -14,7 +15,10 @@ public final class TCPServer {
     }
     
     public func start() throws {
-        let params = NWParameters.tcp
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.noDelay = true
+        
+        let params = NWParameters(tls: nil, tcp: tcpOptions)
         params.allowFastOpen = true
         
         let nwPort = NWEndpoint.Port(rawValue: port)!
@@ -43,6 +47,10 @@ public final class TCPServer {
         print("[Server] New connection received from: \(connection.endpoint)")
         connection.start(queue: queue)
         activeConnections.append(connection)
+        
+        if let initialPacket = latestVideoPacket {
+            connection.send(content: initialPacket, completion: .contentProcessed { _ in })
+        }
         
         receiveNextPacket(from: connection)
     }
@@ -74,9 +82,7 @@ public final class TCPServer {
     }
     
     public func sendVideoFrame(naluData: Data) {
-        guard !activeConnections.isEmpty else { return }
-        
-        var packet = Data()
+        var packet = Data(capacity: 5 + naluData.count)
         // 1 byte packet type
         packet.append(PacketType.videoFrame.rawValue)
         // 4 bytes payload length (big-endian)
@@ -84,6 +90,9 @@ public final class TCPServer {
         packet.append(Data(bytes: &length, count: 4))
         // Video payload
         packet.append(naluData)
+        
+        self.latestVideoPacket = packet
+        guard !activeConnections.isEmpty else { return }
         
         for conn in activeConnections {
             conn.send(content: packet, completion: .contentProcessed { [weak self] error in
