@@ -102,12 +102,16 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         dec.init(2560, 1600)
         this.decoder = dec
 
+        var frameCount = 0
         val client = StreamClient(
             host = "127.0.0.1",
             port = 8080,
-            onFrameReceived = { data ->
-                dec.decodeNalu(data)
-                null
+            onFrameReceived = { data, length ->
+                frameCount++
+                if (frameCount <= 3 || frameCount % 60 == 0) {
+                    android.util.Log.i("MainActivity", "Received frame #$frameCount ($length bytes)")
+                }
+                dec.decodeNalu(data, length)
             },
             onConnectionStateChanged = { connected, message ->
                 runOnUiThread {

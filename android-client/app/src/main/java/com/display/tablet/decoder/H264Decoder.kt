@@ -5,7 +5,6 @@ import android.media.MediaFormat
 import android.os.Build
 import android.util.Log
 import android.view.Surface
-import java.nio.ByteBuffer
 
 class H264Decoder(private val surface: Surface) {
     companion object {
@@ -21,7 +20,7 @@ class H264Decoder(private val surface: Surface) {
         try {
             val format = MediaFormat.createVideoFormat(MIME_TYPE, width, height)
             
-            // Low latency configuration
+            // Android 11+ Low latency configuration
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
@@ -31,13 +30,13 @@ class H264Decoder(private val surface: Surface) {
             decoder.start()
             this.codec = decoder
             this.isConfigured = true
-            Log.i(TAG, "Hardware H264 Decoder initialized for ${width}x${height}")
+            Log.i(TAG, "Hardware H264 Decoder initialized for ${width}x${height} with low latency")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize MediaCodec: ${e.message}", e)
         }
     }
 
-    fun decodeNalu(data: ByteArray, presentationTimeUs: Long = System.nanoTime() / 1000) {
+    fun decodeNalu(data: ByteArray, length: Int = data.size, presentationTimeUs: Long = System.nanoTime() / 1000) {
         val decoder = codec ?: return
         if (!isConfigured) return
 
@@ -47,11 +46,11 @@ class H264Decoder(private val surface: Surface) {
                 val inputBuffer = decoder.getInputBuffer(inputIndex)
                 if (inputBuffer != null) {
                     inputBuffer.clear()
-                    inputBuffer.put(data)
+                    inputBuffer.put(data, 0, length)
                     decoder.queueInputBuffer(
                         inputIndex,
                         0,
-                        data.size,
+                        length,
                         presentationTimeUs,
                         0
                     )

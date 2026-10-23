@@ -5,7 +5,7 @@ import CoreGraphics
 struct MacDisplayHostApp {
     private static var virtualDisplayManager: VirtualDisplayManager?
     
-    static func main() async {
+    static func main() {
         print("======================================================")
         print("    Mac to Android Tablet Display Server (Tab S7)     ")
         print("======================================================")
@@ -123,21 +123,27 @@ struct MacDisplayHostApp {
             inputSynthesizer.handleInput(event: inputEvent)
         }
         
-        do {
-            try server.start()
-            try await capture.startCapture()
-            print("\n[Host] Ready! Waiting for Galaxy Tab S7...")
-            print("[Host] Make sure you ran: adb reverse tcp:\(port) tcp:\(port)")
-            print("Press Ctrl+C to terminate.\n")
-        } catch {
-            print("[Host] Failed to start services: \(error.localizedDescription)")
-            MacDisplayHostApp.virtualDisplayManager?.destroy()
-            exit(1)
+        // 4. Force full keyframe when tablet connects
+        server.onClientConnected = {
+            print("[Host] Tablet connected! Requesting immediate full keyframe from encoder...")
+            encoder.requestKeyframe()
         }
         
-        // Keep process running
-        while true {
-            try? await Task.sleep(nanoseconds: 3_600_000_000_000)
+        Task {
+            do {
+                try server.start()
+                try await capture.startCapture()
+                print("\n[Host] Ready! Waiting for Galaxy Tab S7...")
+                print("[Host] Make sure you ran: adb reverse tcp:\(port) tcp:\(port)")
+                print("Press Ctrl+C to terminate.\n")
+            } catch {
+                print("[Host] Failed to start services: \(error.localizedDescription)")
+                MacDisplayHostApp.virtualDisplayManager?.destroy()
+                exit(1)
+            }
         }
+        
+        // Run main runloop to keep process alive and pump virtual display events
+        RunLoop.main.run()
     }
 }

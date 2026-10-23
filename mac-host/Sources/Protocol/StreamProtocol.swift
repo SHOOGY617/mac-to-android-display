@@ -15,6 +15,7 @@ public enum InputAction: UInt8 {
     case down = 0
     case move = 1
     case up = 2
+    case scroll = 3
 }
 
 public struct TabletInputEvent {

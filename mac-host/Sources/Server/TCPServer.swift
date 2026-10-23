@@ -9,6 +9,7 @@ public final class TCPServer {
     private let port: UInt16
     
     public var onInputEventReceived: ((TabletInputEvent) -> Void)?
+    public var onClientConnected: (() -> Void)?
     
     public init(port: UInt16 = 8080) {
         self.port = port
@@ -52,6 +53,7 @@ public final class TCPServer {
             connection.send(content: initialPacket, completion: .contentProcessed { _ in })
         }
         
+        onClientConnected?()
         receiveNextPacket(from: connection)
     }
     

@@ -10,6 +10,7 @@ public final class H264Encoder {
     private let bitrate: Int32
     
     public var onNALUEncoded: ((Data) -> Void)?
+    private var forceNextKeyframe = true
     
     private let startCode = Data([0x00, 0x00, 0x00, 0x01])
     private var spsData: Data?
@@ -62,13 +63,27 @@ public final class H264Encoder {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: (fps * 2) as CFNumber)
         // Disallow B-frames for zero reordering latency
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+        // Disable encoder lookahead frames for zero lookahead delay
+        VTSessionSetProperty(session, key: "LookAheadFrames" as CFString, value: 0 as CFNumber)
+        // Prioritize hardware encoding speed over multi-pass compression
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         
         VTCompressionSessionPrepareToEncodeFrames(session)
         print("[Encoder] H.264 Encoder initialized: \(width)x\(height) @ \(fps)fps, \(bitrate / 1_000_000) Mbps")
     }
     
+    public func requestKeyframe() {
+        forceNextKeyframe = true
+    }
+    
     public func encode(pixelBuffer: CVPixelBuffer, presentationTimestamp: CMTime) {
         guard let session = compressionSession else { return }
+        
+        var frameProps: [CFString: Any] = [:]
+        if forceNextKeyframe {
+            frameProps[kVTEncodeFrameOptionKey_ForceKeyFrame] = kCFBooleanTrue
+            forceNextKeyframe = false
+        }
         
         var flags: VTEncodeInfoFlags = []
         let status = VTCompressionSessionEncodeFrame(
@@ -76,7 +91,7 @@ public final class H264Encoder {
             imageBuffer: pixelBuffer,
             presentationTimeStamp: presentationTimestamp,
             duration: CMTime(value: 1, timescale: fps),
-            frameProperties: nil,
+            frameProperties: frameProps.isEmpty ? nil : (frameProps as CFDictionary),
             sourceFrameRefcon: nil,
             infoFlagsOut: &flags
         )
