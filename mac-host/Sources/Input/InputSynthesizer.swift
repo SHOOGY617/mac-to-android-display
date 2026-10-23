@@ -2,6 +2,16 @@ import Foundation
 import CoreGraphics
 import AppKit
 
+typealias CGSConnectionID = Int32
+@_silgen_name("CGSMainConnectionID")
+func CGSMainConnectionID() -> CGSConnectionID
+
+@_silgen_name("CGSCopyManagedDisplaySpaces")
+func CGSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> CFArray?
+
+@_silgen_name("CGSManagedDisplaySetCurrentSpace")
+func CGSManagedDisplaySetCurrentSpace(_ cid: CGSConnectionID, _ displayUUID: CFString, _ spaceID: UInt64) -> Int32
+
 public final class InputSynthesizer {
     private var targetDisplayBounds: CGRect
     private var targetDisplayID: CGDirectDisplayID?
@@ -121,7 +131,9 @@ public final class InputSynthesizer {
 
         case .missionControl:
             // 3-finger swipe UP: Mission Control
-            print("[Input] ⚡️ Mission Control triggered!")
+            let centerPoint = CGPoint(x: currentBounds.midX, y: currentBounds.midY)
+            CGWarpMouseCursorPosition(centerPoint)
+            print("[Input] ⚡️ Mission Control triggered on target display!")
             let mcURL = URL(fileURLWithPath: "/System/Applications/Mission Control.app")
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
@@ -131,20 +143,30 @@ public final class InputSynthesizer {
 
         case .appExpose:
             // 3-finger swipe DOWN: Application Windows (Ctrl + Down Arrow)
+            let centerPoint = CGPoint(x: currentBounds.midX, y: currentBounds.midY)
+            CGWarpMouseCursorPosition(centerPoint)
             print("[Input] ⚡️ App Exposé triggered!")
             synthesizeKeyShortcut(virtualKey: 0x7D, flags: .maskControl)
             return
 
         case .swipeSpacesLeft:
-            // 3-finger swipe RIGHT: Switch to space on the left (Ctrl + Left Arrow)
+            // 3-finger swipe RIGHT: Switch to space on the left
             print("[Input] ⚡️ Switch Space Left triggered!")
-            synthesizeKeyShortcut(virtualKey: 0x7B, flags: .maskControl)
+            let centerPoint = CGPoint(x: currentBounds.midX, y: currentBounds.midY)
+            CGWarpMouseCursorPosition(centerPoint)
+            if !switchSpaceOnDisplay(targetBounds: currentBounds, direction: -1) {
+                synthesizeKeyShortcut(virtualKey: 0x7B, flags: .maskControl)
+            }
             return
 
         case .swipeSpacesRight:
-            // 3-finger swipe LEFT: Switch to space on the right (Ctrl + Right Arrow)
+            // 3-finger swipe LEFT: Switch to space on the right
             print("[Input] ⚡️ Switch Space Right triggered!")
-            synthesizeKeyShortcut(virtualKey: 0x7C, flags: .maskControl)
+            let centerPoint = CGPoint(x: currentBounds.midX, y: currentBounds.midY)
+            CGWarpMouseCursorPosition(centerPoint)
+            if !switchSpaceOnDisplay(targetBounds: currentBounds, direction: 1) {
+                synthesizeKeyShortcut(virtualKey: 0x7C, flags: .maskControl)
+            }
             return
 
         case .down, .move, .up:
@@ -203,6 +225,48 @@ public final class InputSynthesizer {
         event.setDoubleValueField(CGEventField(rawValue: 113)!, value: delta) // Magnification
         event.location = point
         event.post(tap: .cghidEventTap)
+    }
+
+    private func switchSpaceOnDisplay(targetBounds: CGRect, direction: Int) -> Bool {
+        let cid = CGSMainConnectionID()
+        guard let displays = CGSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else { return false }
+
+        for d in displays {
+            let displayUUID = d["Display Identifier"] as? String ?? ""
+            var matches = false
+            if let currentDict = d["Current Space"] as? [String: Any],
+               let layout = currentDict["TileLayoutManager"] as? [String: Any],
+               let rect = layout["Layout Rect"] as? [String: Any],
+               let x = rect["X"] as? Double,
+               let y = rect["Y"] as? Double {
+                if abs(x - Double(targetBounds.origin.x)) < 5 && abs(y - Double(targetBounds.origin.y)) < 5 {
+                    matches = true
+                }
+            }
+            
+            // Fallback for secondary display
+            if !matches && displays.count >= 2 && d as NSDictionary != displays[0] as NSDictionary {
+                matches = true
+            }
+
+            guard matches else { continue }
+
+            guard let spaces = d["Spaces"] as? [[String: Any]],
+                  let currentDict = d["Current Space"] as? [String: Any],
+                  let currentID = currentDict["ManagedSpaceID"] as? UInt64 else { continue }
+
+            guard let currentIndex = spaces.firstIndex(where: { ($0["ManagedSpaceID"] as? UInt64) == currentID }) else { continue }
+
+            let nextIndex = currentIndex + direction
+            if nextIndex >= 0 && nextIndex < spaces.count {
+                if let nextSpaceID = spaces[nextIndex]["ManagedSpaceID"] as? UInt64 {
+                    let res = CGSManagedDisplaySetCurrentSpace(cid, displayUUID as CFString, nextSpaceID)
+                    print("[Input] Switched space on display \(displayUUID) from \(currentIndex) to \(nextIndex) (res: \(res))")
+                    return res == 0
+                }
+            }
+        }
+        return false
     }
 
     private func synthesizeKeyShortcut(virtualKey: CGKeyCode, flags: CGEventFlags) {
