@@ -6,6 +6,8 @@ public final class InputSynthesizer {
     private var targetDisplayBounds: CGRect
     private var targetDisplayID: CGDirectDisplayID?
     private var isDragging = false
+    private var isPinchActive = false
+    private var endPinchWorkItem: DispatchWorkItem?
     
     public init(displayID: CGDirectDisplayID? = nil, displayBounds: CGRect? = nil) {
         self.targetDisplayID = displayID
@@ -50,17 +52,36 @@ public final class InputSynthesizer {
             let point = CGPoint(x: screenX, y: screenY)
             CGWarpMouseCursorPosition(point)
 
-            let steps = Int32(round(event.pressure))
+            let steps = Double(event.pressure)
             guard steps != 0 else { return }
 
             print("[Input] 🔍 Pinch Zoom: \(steps > 0 ? "IN" : "OUT") (\(steps)) at (\(Int(screenX)), \(Int(screenY)))")
 
-            // Synthesize line-based scroll wheel with Command modifier (universal macOS zoom)
+            // 1. Native Apple trackpad gesture event (Type 29, field 110=8, field 132=phase, field 113=delta)
+            // Handled natively by Safari, Preview, Maps, Photos, Figma, etc.
+            let delta = steps * 0.05
+            if !isPinchActive {
+                isPinchActive = true
+                postNativePinch(delta: delta, point: point, phase: 1) // Began
+            }
+            postNativePinch(delta: delta, point: point, phase: 2) // Changed
+
+            // Debounced gesture completion
+            endPinchWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self = self, self.isPinchActive else { return }
+                self.postNativePinch(delta: 0, point: point, phase: 4) // Ended
+                self.isPinchActive = false
+            }
+            endPinchWorkItem = workItem
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.15, execute: workItem)
+
+            // 2. Synthesize line-based scroll wheel with Command modifier for browsers/editors
             if let zoomEvent = CGEvent(
                 scrollWheelEvent2Source: nil,
                 units: .line,
                 wheelCount: 1,
-                wheel1: steps * 2,
+                wheel1: Int32(steps * 2),
                 wheel2: 0,
                 wheel3: 0
             ) {
@@ -172,6 +193,16 @@ public final class InputSynthesizer {
         }
         
         cgEvent.post(tap: .cghidEventTap)
+    }
+
+    private func postNativePinch(delta: Double, point: CGPoint, phase: Int64) {
+        guard let event = CGEvent(source: nil) else { return }
+        event.type = CGEventType(rawValue: 29)! // gesture
+        event.setIntegerValueField(CGEventField(rawValue: 110)!, value: 8) // Zoom HID type
+        event.setIntegerValueField(CGEventField(rawValue: 132)!, value: phase) // Began=1, Changed=2, Ended=4
+        event.setDoubleValueField(CGEventField(rawValue: 113)!, value: delta) // Magnification
+        event.location = point
+        event.post(tap: .cghidEventTap)
     }
 
     private func synthesizeKeyShortcut(virtualKey: CGKeyCode, flags: CGEventFlags) {

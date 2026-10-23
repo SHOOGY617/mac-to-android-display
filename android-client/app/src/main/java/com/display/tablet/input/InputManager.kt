@@ -196,9 +196,9 @@ class InputManager(private val streamClient: StreamClient) {
                     }
 
                     // Dynamically prioritize Pinch-to-Zoom if finger distance changes
-                    if (abs(dSpan) > 1.15f * dMidDist && abs(dSpan) > 2f) {
+                    if (abs(dSpan) > 1.1f * dMidDist && abs(dSpan) > 1.8f) {
                         pinchAccumulator += dSpan
-                        val zoomThreshold = 14f // Smooth step every 14px span change
+                        val zoomThreshold = 10f // Snappy step every 10px span change
                         if (abs(pinchAccumulator) >= zoomThreshold) {
                             val steps = (pinchAccumulator / zoomThreshold).toInt()
                             pinchAccumulator -= steps * zoomThreshold
